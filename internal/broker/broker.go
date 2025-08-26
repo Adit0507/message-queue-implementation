@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/Adit0507/message-queue-implementation/pkg/config"
 	"github.com/gorilla/mux"
@@ -66,6 +67,47 @@ func (b *Broker) handleWebsocket(w http.ResponseWriter, r* http.Request) {
 		return
 	}
 	
+	clientID := generateClientID()
+	b.mutex.Lock()
+	b.connections[clientID] = conn
+	b.mutex.Unlock()
 
+	defer func ()  {
+		b.mutex.Lock()
+		delete(b.connections, clientID)
+		b.mutex.Unlock()
 
+		conn.Close()
+		log.Printf("Client %s disconnected", clientID)
+	}()
+
+	log.Printf("Client %s connected", clientID)
+
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			log.Printf("error reading message from %s: %v", clientID, err)
+			break
+		}
+
+		if err = b.handleMessage(clientID, message, conn); err != nil{
+			log.Printf("error handling message from %s: %v", clientID, err)
+			b.sendErrorResponse(conn, "", fmt.Sprintf("Error processing message: %v", err))
+		}
+
+	}
+	
+
+}
+
+func (b *Broker) sendErrorResponse(conn *websocket.Conn, messageID, errorMsg string) {
+	
+}
+
+func (b *Broker) handleMessage(clientID string, message []byte, conn *websocket.Conn ) error {
+
+}
+
+func generateClientID() string {
+	return fmt.Sprintf("client_%d_%d", time.Now().UnixNano(), len(fmt.Sprintf("%d", time.Now().UnixNano())))
 }
