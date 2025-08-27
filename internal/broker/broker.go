@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Adit0507/message-queue-implementation/internal/protocol"
 	"github.com/Adit0507/message-queue-implementation/pkg/config"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -59,20 +60,19 @@ func (b *Broker) Start() error {
 	return http.ListenAndServe(addr, router)
 }
 
-
-func (b *Broker) handleWebsocket(w http.ResponseWriter, r* http.Request) {
+func (b *Broker) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := b.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("websocket upgrade failed: %v", err)
 		return
 	}
-	
+
 	clientID := generateClientID()
 	b.mutex.Lock()
 	b.connections[clientID] = conn
 	b.mutex.Unlock()
 
-	defer func ()  {
+	defer func() {
 		b.mutex.Lock()
 		delete(b.connections, clientID)
 		b.mutex.Unlock()
@@ -90,21 +90,36 @@ func (b *Broker) handleWebsocket(w http.ResponseWriter, r* http.Request) {
 			break
 		}
 
-		if err = b.handleMessage(clientID, message, conn); err != nil{
+		if err = b.handleMessage(clientID, message, conn); err != nil {
 			log.Printf("error handling message from %s: %v", clientID, err)
 			b.sendErrorResponse(conn, "", fmt.Sprintf("Error processing message: %v", err))
 		}
-
 	}
-	
-
 }
 
 func (b *Broker) sendErrorResponse(conn *websocket.Conn, messageID, errorMsg string) {
-	
+	response := &protocol.Response{
+		Type:      protocol.TypeError,
+		Success:   false,
+		MessageID: messageID,
+		Error:     errorMsg,
+		Timestamp: time.Now(),
+	}
+
+	b.sendResponse(conn, response)
 }
 
-func (b *Broker) handleMessage(clientID string, message []byte, conn *websocket.Conn ) error {
+func (b *Broker) sendResponse(conn *websocket.Conn, response *protocol.Response) error {
+	data, err := response.ToJSON()
+	if err != nil {
+		return err
+	}
+
+	return conn.WriteMessage(websocket.TextMessage, data)
+
+}
+
+func (b *Broker) handleMessage(clientID string, message []byte, conn *websocket.Conn) error {
 
 }
 
