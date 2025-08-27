@@ -119,7 +119,58 @@ func (b *Broker) sendResponse(conn *websocket.Conn, response *protocol.Response)
 
 }
 
-func (b *Broker) handleMessage(clientID string, message []byte, conn *websocket.Conn) error {
+func (b *Broker) handleMessage(clientID string, data []byte, conn *websocket.Conn) error {
+	cmd, err := protocol.ParseCommand(data)
+	if err != nil {
+		return fmt.Errorf("failed to parse command %v", err)
+	}
+
+	switch cmd.Type {
+	case protocol.TypePublish:
+		return b.handlePublish(clientID, cmd, conn)
+
+	default:
+		return fmt.Errorf("unknown message type %s", cmd.Type)
+	}
+}
+
+func (b *Broker) handlePublish(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
+	if cmd.Queue == "" {
+		return fmt.Errorf("queue name is required for publish")
+	}
+
+	queue := b.getOrCreateQueue(cmd.Queue)
+
+	msg := NewMessage(cmd.Queue, cmd.Payload, cmd.Headers)
+
+	if err := queue.Publish(msg); err != nil {
+		return err
+	}
+
+	// dispatchin message to consumers
+	b.messageDispatcher <- &MessageDispatch{
+		Queue: cmd.Queue,
+		Message: msg,
+	}
+
+	response := &protocol.Response{
+		Type: protocol.TypeSuccess,
+		Success: true,
+		MessageID: msg.ID,
+		Timestamp: time.Now(),
+	}
+
+
+	return b.sendResponse(conn, response)
+}
+
+func (b *Broker) getOrCreateQueue(name string) *Queue {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if queue, exists := b.queues[name]; exists {
+		return  &queue
+	}
 
 }
 
