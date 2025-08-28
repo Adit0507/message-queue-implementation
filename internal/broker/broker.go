@@ -15,7 +15,7 @@ import (
 
 type Broker struct {
 	config            *config.BrokerConfig
-	queues            map[string]Queue
+	queues            map[string]*Queue
 	connections       map[string]*websocket.Conn
 	pendingMessages   map[string]*Message
 	mutex             sync.RWMutex
@@ -149,17 +149,16 @@ func (b *Broker) handlePublish(clientID string, cmd *protocol.Command, conn *web
 
 	// dispatchin message to consumers
 	b.messageDispatcher <- &MessageDispatch{
-		Queue: cmd.Queue,
+		Queue:   cmd.Queue,
 		Message: msg,
 	}
 
 	response := &protocol.Response{
-		Type: protocol.TypeSuccess,
-		Success: true,
+		Type:      protocol.TypeSuccess,
+		Success:   true,
 		MessageID: msg.ID,
 		Timestamp: time.Now(),
 	}
-
 
 	return b.sendResponse(conn, response)
 }
@@ -169,9 +168,14 @@ func (b *Broker) getOrCreateQueue(name string) *Queue {
 	defer b.mutex.Unlock()
 
 	if queue, exists := b.queues[name]; exists {
-		return  &queue
+		return queue
 	}
 
+	queue := NewQueue(name, b.config.MaxQueueSize)
+	b.queues[name] =  queue
+	log.Printf("created new queue %s", name)
+
+	return queue
 }
 
 func generateClientID() string {
