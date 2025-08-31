@@ -99,7 +99,7 @@ func (b *Broker) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Broker) startMessageDispatcher() {
-	for dispatch := range b.messageDispatcher{
+	for dispatch := range b.messageDispatcher {
 		b.deliverMessage(dispatch.Queue, dispatch.Message)
 	}
 }
@@ -109,7 +109,7 @@ func (b *Broker) deliverMessage(queueName string, message *Message) {
 	queue, exists := b.queues[queueName]
 	b.mutex.RUnlock()
 
-	if !exists{
+	if !exists {
 		log.Printf("Queue %s not found for message delivery", queueName)
 		return
 	}
@@ -122,7 +122,7 @@ func (b *Broker) deliverMessage(queueName string, message *Message) {
 	}
 
 	// delivery to first availabel subscriber
-	for _, subscriber := range subscribers{
+	for _, subscriber := range subscribers {
 		if b.sendMessageToConsumer(subscriber, message) {
 			message.MarkDelivered(subscriber.ID)
 			b.mutex.Lock()
@@ -143,23 +143,22 @@ func (b *Broker) sendMessageToConsumer(consumer *Consumer, message *Message) boo
 	}
 
 	response := &protocol.Response{
-		Type: protocol.TypeSuccess,
-		Success: true,
+		Type:      protocol.TypeSuccess,
+		Success:   true,
 		MessageID: message.ID,
 		Data: map[string]interface{}{
 			"queue":      message.Queue,
 			"payload":    message.Payload,
 			"headers":    message.Headers,
 			"created_at": message.CreatedAt,
-			"attempts":   message.Attempts,			
+			"attempts":   message.Attempts,
 		},
 
 		Timestamp: time.Now(),
 	}
 
-	return b.sendResponse(conn, response)== nil
+	return b.sendResponse(conn, response) == nil
 }
-
 
 func (b *Broker) sendErrorResponse(conn *websocket.Conn, messageID, errorMsg string) {
 	response := &protocol.Response{
@@ -201,9 +200,45 @@ func (b *Broker) handleMessage(clientID string, data []byte, conn *websocket.Con
 	case protocol.TypeACK:
 		return b.handleAck(clientID, cmd, conn)
 
+	case protocol.TypeNACK:
+		return b.handleNack(clientID, cmd, conn)
+
 	default:
 		return fmt.Errorf("unknown message type %s", cmd.Type)
 	}
+}
+
+func (b *Broker) handleNack(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
+	if cmd.MessageID == "" {
+		return fmt.Errorf("message_id is required for nack")
+	}
+
+	b.mutex.Lock()
+	message, exists := b.pendingMessages[cmd.MessageID]
+	if exists {
+		if message.CanRetry() {
+			// requeue message
+			queue := b.getOrCreateQueue(message.Queue)
+			message.Status = StatusPending
+
+			queue.Publish(message)
+		} else {
+			message.MarkFailed()
+		}
+
+		delete(b.pendingMessages, cmd.MessageID)
+	}
+
+	b.mutex.Unlock()
+
+	response := &protocol.Response{
+		Type:      protocol.TypeSuccess,
+		Success:   true,
+		MessageID: cmd.MessageID,
+		Timestamp: time.Now(),
+	}
+
+	return b.sendResponse(conn, response)
 }
 
 func (b *Broker) handleAck(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
@@ -224,8 +259,8 @@ func (b *Broker) handleAck(clientID string, cmd *protocol.Command, conn *websock
 	}
 
 	response := &protocol.Response{
-		Type: protocol.TypeSuccess,
-		Success: true,
+		Type:      protocol.TypeSuccess,
+		Success:   true,
 		MessageID: cmd.MessageID,
 		Timestamp: time.Now(),
 	}
