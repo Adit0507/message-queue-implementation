@@ -51,8 +51,8 @@ func (b *Broker) Start() error {
 
 	router := mux.NewRouter()
 	router.HandleFunc("/ws", b.handleWebsocket)
-	router.HandleFunc("/queues", b.HandleGetQueues).Methods("GET")
-	router.HandleFunc("/queues/{name}/stats", b.handleGetQueueStats).Methods("GET")
+	router.HandleFunc("/queues", b.handleGetQueues).Methods("GET")
+	router.HandleFunc("/queues/{name}/stats", b.handleGetQueuesStats).Methods("GET")
 	router.HandleFunc("/health", b.handleHealth).Methods("GET")
 
 	addr := fmt.Sprintf("%s:%d", b.config.Host, b.config.Port)
@@ -394,6 +394,39 @@ func (b *Broker) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"queues":      len(b.queues),
 		"connections": len(b.connections),
 	})
+}
+
+func (b *Broker) handleGetQueues(w http.ResponseWriter, r *http.Request) {
+	b.mutex.RLock()
+	queueNames := make([]string, 0, len(b.queues))
+	for name := range b.queues {
+		queueNames = append(queueNames, name)
+	}
+	b.mutex.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"queues": queueNames,
+		"count":  len(queueNames),
+	})
+}
+
+func (b *Broker) handleGetQueuesStats(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	queueName := vars["name"]
+
+	b.mutex.RLock()
+	queue, exists := b.queues[queueName]
+	b.mutex.RUnlock()
+
+	if !exists {
+		http.Error(w, "Queue not found", http.StatusNotFound)
+		return
+	}
+
+	stats := queue.GetStats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
 
 func (b *Broker) getOrCreateQueue(name string) *Queue {
