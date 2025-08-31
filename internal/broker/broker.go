@@ -98,6 +98,69 @@ func (b *Broker) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (b *Broker) startMessageDispatcher() {
+	for dispatch := range b.messageDispatcher{
+		b.deliverMessage(dispatch.Queue, dispatch.Message)
+	}
+}
+
+func (b *Broker) deliverMessage(queueName string, message *Message) {
+	b.mutex.RLock()
+	queue, exists := b.queues[queueName]
+	b.mutex.RUnlock()
+
+	if !exists{
+		log.Printf("Queue %s not found for message delivery", queueName)
+		return
+	}
+
+	subscribers := queue.GetSubscribers()
+	if len(subscribers) == 0 {
+		// no subscribers message back in queue
+		queue.Publish(message)
+		return
+	}
+
+	// delivery to first availabel subscriber
+	for _, subscriber := range subscribers{
+		if b.sendMessageToConsumer(subscriber, message) {
+			message.MarkDelivered(subscriber.ID)
+			b.mutex.Lock()
+			b.pendingMessages[message.ID] = message
+			b.mutex.Unlock()
+
+			return
+		}
+	}
+
+	queue.Publish(message)
+}
+
+func (b *Broker) sendMessageToConsumer(consumer *Consumer, message *Message) bool {
+	conn, ok := consumer.Connection.(*websocket.Conn)
+	if !ok {
+		return false
+	}
+
+	response := &protocol.Response{
+		Type: protocol.TypeSuccess,
+		Success: true,
+		MessageID: message.ID,
+		Data: map[string]interface{}{
+			"queue":      message.Queue,
+			"payload":    message.Payload,
+			"headers":    message.Headers,
+			"created_at": message.CreatedAt,
+			"attempts":   message.Attempts,			
+		},
+
+		Timestamp: time.Now(),
+	}
+
+	return b.sendResponse(conn, response)== nil
+}
+
+
 func (b *Broker) sendErrorResponse(conn *websocket.Conn, messageID, errorMsg string) {
 	response := &protocol.Response{
 		Type:      protocol.TypeError,
