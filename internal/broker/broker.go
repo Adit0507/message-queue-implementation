@@ -61,6 +61,39 @@ func (b *Broker) Start() error {
 	return http.ListenAndServe(addr, router)
 }
 
+func (b *Broker) startCleanupRoutine() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		b.cleanupPendingMessages()
+	}
+}
+
+func (b *Broker) cleanupPendingMessages() {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	now := time.Now()
+	timeout := 5 * time.Minute
+
+	for messageId, message := range b.pendingMessages {
+		if message.DeliveredAt != nil && now.Sub(*message.DeliveredAt) > timeout {
+			if message.CanRetry() {
+				if queue, exists := b.queues[message.Queue]; exists {
+					message.Status = StatusPending
+					queue.Publish(message)
+				}
+			} else {
+				message.MarkFailed()
+			}
+
+			delete(b.pendingMessages, messageId)
+			log.Printf("Cleaned up pending message %s", messageId)
+		}
+	}
+}
+
 func (b *Broker) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := b.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -203,9 +236,22 @@ func (b *Broker) handleMessage(clientID string, data []byte, conn *websocket.Con
 	case protocol.TypeNACK:
 		return b.handleNack(clientID, cmd, conn)
 
+	case protocol.TypeHeartbeat:
+		return b.handleHeartBeat(clientID, conn)
+
 	default:
 		return fmt.Errorf("unknown message type %s", cmd.Type)
 	}
+}
+
+func (b *Broker) handleHeartBeat(clientID string, conn *websocket.Conn) error {
+	response := &protocol.Response{
+		Type:      protocol.TypeHeartbeat,
+		Success:   true,
+		Timestamp: time.Now(),
+	}
+
+	return b.sendResponse(conn, response)
 }
 
 func (b *Broker) handleNack(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
