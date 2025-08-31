@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -31,7 +32,7 @@ type MessageDispatch struct {
 func NewBroker(cfg *config.BrokerConfig) *Broker {
 	return &Broker{
 		config:            cfg,
-		queues:            make(map[string]Queue),
+		queues:            make(map[string]*Queue),
 		connections:       make(map[string]*websocket.Conn),
 		pendingMessages:   make(map[string]*Message),
 		messageDispatcher: make(chan *MessageDispatch, 1000),
@@ -129,9 +130,31 @@ func (b *Broker) handleMessage(clientID string, data []byte, conn *websocket.Con
 	case protocol.TypePublish:
 		return b.handlePublish(clientID, cmd, conn)
 
+	case protocol.TypeSubscribe:
+		return b.handleSubscribe(clientID, cmd, conn)
+
 	default:
 		return fmt.Errorf("unknown message type %s", cmd.Type)
 	}
+}
+
+func (b *Broker) handleSubscribe(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
+	if cmd.Queue == "" {
+		return fmt.Errorf("queue name is required for subscribe")
+	}
+
+	queue := b.getOrCreateQueue(cmd.Queue)
+	queue.Subscribe(clientID, conn)
+
+	response := &protocol.Response{
+		Type:      protocol.TypeSuccess,
+		Success:   true,
+		Data:      map[string]interface{}{"queue": cmd.Queue, "consumer_id": clientID},
+		Timestamp: time.Now(),
+	}
+
+	log.Printf("Client %s subscribed to queue %s", clientID, cmd.Queue)
+	return b.sendResponse(conn, response)
 }
 
 func (b *Broker) handlePublish(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
@@ -163,6 +186,17 @@ func (b *Broker) handlePublish(clientID string, cmd *protocol.Command, conn *web
 	return b.sendResponse(conn, response)
 }
 
+func (b *Broker) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "healthy",
+		"timestamp":   time.Now(),
+		"queues":      len(b.queues),
+		"connections": len(b.connections),
+	})
+}
+
 func (b *Broker) getOrCreateQueue(name string) *Queue {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
@@ -172,7 +206,7 @@ func (b *Broker) getOrCreateQueue(name string) *Queue {
 	}
 
 	queue := NewQueue(name, b.config.MaxQueueSize)
-	b.queues[name] =  queue
+	b.queues[name] = queue
 	log.Printf("created new queue %s", name)
 
 	return queue
