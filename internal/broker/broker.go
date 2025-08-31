@@ -133,9 +133,35 @@ func (b *Broker) handleMessage(clientID string, data []byte, conn *websocket.Con
 	case protocol.TypeSubscribe:
 		return b.handleSubscribe(clientID, cmd, conn)
 
+	case protocol.TypeUnsubscribe:
+		return b.handleUnsubscribe(clientID, cmd, conn)
+
 	default:
 		return fmt.Errorf("unknown message type %s", cmd.Type)
 	}
+}
+
+func (b *Broker) handleUnsubscribe(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
+	if cmd.Queue == "" {
+		return fmt.Errorf("queue name is required for unsubscribe")
+	}
+
+	b.mutex.RLock()
+	queue, exists := b.queues[cmd.Queue]
+	b.mutex.RUnlock()
+
+	if exists {
+		queue.Unsubscribe(clientID)
+	}
+
+	response := &protocol.Response{
+		Type:      protocol.TypeSuccess,
+		Success:   true,
+		Data:      map[string]interface{}{"queue": cmd.Queue},
+		Timestamp: time.Now(),
+	}
+
+	return b.sendResponse(conn, response)
 }
 
 func (b *Broker) handleSubscribe(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
