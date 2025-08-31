@@ -198,10 +198,39 @@ func (b *Broker) handleMessage(clientID string, data []byte, conn *websocket.Con
 
 	case protocol.TypeUnsubscribe:
 		return b.handleUnsubscribe(clientID, cmd, conn)
+	case protocol.TypeACK:
+		return b.handleAck(clientID, cmd, conn)
 
 	default:
 		return fmt.Errorf("unknown message type %s", cmd.Type)
 	}
+}
+
+func (b *Broker) handleAck(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
+	if cmd.MessageID == "" {
+		return fmt.Errorf("message_id is required for ack")
+	}
+
+	b.mutex.Lock()
+	message, exists := b.pendingMessages[cmd.MessageID]
+	if exists {
+		message.MarkAcknowledged()
+		delete(b.pendingMessages, cmd.MessageID)
+	}
+
+	b.mutex.Unlock()
+	if !exists {
+		return fmt.Errorf("message %s not found or already acknowledged", cmd.MessageID)
+	}
+
+	response := &protocol.Response{
+		Type: protocol.TypeSuccess,
+		Success: true,
+		MessageID: cmd.MessageID,
+		Timestamp: time.Now(),
+	}
+
+	return b.sendResponse(conn, response)
 }
 
 func (b *Broker) handleUnsubscribe(clientID string, cmd *protocol.Command, conn *websocket.Conn) error {
