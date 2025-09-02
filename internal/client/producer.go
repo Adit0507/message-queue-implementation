@@ -3,7 +3,9 @@ package client
 import (
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/Adit0507/message-queue-implementation/internal/protocol"
 	"github.com/gorilla/websocket"
 )
 
@@ -40,4 +42,44 @@ func (p *Producer) Disconnect() error {
 	}
 	
 	return nil
+}
+
+func (p *Producer) Publish(queue string, payload map[string] interface{}, headers map[string]string) (*protocol.Response, error) {
+	if !p.connected{
+		return nil, fmt.Errorf("producer is not connected")
+	}
+
+	if headers == nil{
+		headers = make(map[string]string)
+	}
+
+	cmd := &protocol.Command{
+		Type: protocol.TypePublish,
+		Queue: queue,
+		Payload: payload,
+		Headers: headers,
+		Timestamp: time.Now(),
+	}
+
+	data, err := cmd.ToJSON()
+	if err != nil {
+		return  nil, fmt.Errorf("failed to serialize command %v", err)
+	}
+
+	if err := p.conn.WriteMessage(websocket.TextMessage, data); err != nil{
+		return  nil, fmt.Errorf("failed to send message %v", err)
+	}
+
+	// read response
+	_, responseData, err := p.conn.ReadMessage()
+	if err != nil {
+		return  nil, fmt.Errorf("failed to read response %v", err)
+	}
+
+	response, err := protocol.ParseResponse(responseData)
+	if err != nil{
+		return nil, fmt.Errorf("failed to parse response %v", err)
+	}
+
+	return response, nil
 }
