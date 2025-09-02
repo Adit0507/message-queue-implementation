@@ -83,3 +83,19 @@ func (p *Producer) Publish(queue string, payload map[string] interface{}, header
 
 	return response, nil
 }
+
+func (p *Producer) PublishBatch(queue string, messages []map[string]interface{}) error {
+	for i, payload :=range messages {
+		headers := map[string]string {
+			"batch_id":    fmt.Sprintf("batch_%d", time.Now().Unix()),
+			"batch_index": fmt.Sprintf("%d", i),
+			"batch_size":  fmt.Sprintf("%d", len(messages)),
+		}
+
+		if _, err := p.Publish(queue, payload, headers); err != nil {
+			return fmt.Errorf("failed to publish message %d in batch: %v", i, err)
+		}
+	}
+
+	return  nil
+}
